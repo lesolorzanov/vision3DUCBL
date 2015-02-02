@@ -156,9 +156,74 @@ void ourInit(void)
     glShadeModel(GL_SMOOTH);
 }
 
+void OpenniStuff(){
+
+
+    /*******************************
+      opennni
+      ********************************/
+
+    OpenNI2WrapperOpenCV::GrabFrameFromStream ( m_depthStream, m_depthFrame );
+
+    OpenNI2WrapperOpenCV::ConvertDepthFrameToStream ( m_depthFrame, cam_depthGRAY );
+
+    int pasEch=10;
+    int dx=WIDTH/pasEch,dy=HEIGHT/pasEch;
+
+    for (int y = 0; y < cam_depthGRAY.rows-dy; y+=dy)
+    {
+       short* row_ptr = cam_depthGRAY.ptr<short>(y);
+       short* row_ptrplus = cam_depthGRAY.ptr<short>(y+dy);
+       for (int x = 0; x < cam_depthGRAY.cols-dx; x+=dx)
+       {
+
+           //here you must normalize xy and Z so that the normals are calculated
+           //in a nice space XD
+
+           //so first normalize the steps x goes from 0 to width=320 so a normalized would be
+           //x=0 u=0; x=32 u=0.1, x=320 u=1
+           //same thing for height
+
+           //then; to normalize Z you hqve to find the min and the max in a loop outside this one
+           //example Z=5200 (imagine it is the max, 52 centimeters)  u=1
+           //example Z=600 (imagine it is the min, 6 centimeters)  u=0
+
+           //only then you will have a nice unit cube to find a more approximate normal and that is it
+           //you can place the teapot
+
+           //then come back here and normalize Z (you must find the minimul and maximum)
+
+           glBegin(GL_TRIANGLES);
+           glVertex3f(inx,iny,x1);
+           glVertex3f(inx+dx,iny,x1);
+           glVertex3f(inx,iny+dy,x2);
+           glEnd();
+
+
+
+           glBegin(GL_TRIANGLES);
+           glVertex3f(inx+dx,iny,x1);
+           glVertex3f(inx,iny+dy,x2);
+           glVertex3f(inx+dx,iny+dy,x2);
+           glEnd();
+       }
+    }
+
+    /*******************************
+     END
+      opennni
+      ********************************/
+
+
+
+}
+
 
 void cbRenderScene(void)
 {
+    OpenNI2WrapperOpenCV::GrabFrameFromStream ( m_colorStream, m_colorFrame );
+    OpenNI2WrapperOpenCV::ConvertColorFrameToStream ( m_colorFrame, cam_rgb );
+
 
     // active textures
     glEnable(GL_TEXTURE_2D);
@@ -170,76 +235,30 @@ void cbRenderScene(void)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 
-    /*******************************
-      opennni
-      ********************************/
-
-    OpenNI2WrapperOpenCV::GrabFrameFromStream ( m_depthStream, m_depthFrame );
-
-    OpenNI2WrapperOpenCV::ConvertDepthFrameToStream ( m_depthFrame, cam_depthGRAY );
-/*
-    int pasEch=10;
-    int dx=WIDTH/pasEch,dy=HEIGHT/pasEch;
-    short min=32767, max=0;
-    short echtlln[dy][dx];
-
-    //il fqut preciser le data type du position camera
-
-    //trouver camera Z
-
-    short cameraZ=55; //je vais changer ca pour le min Z apres
-
-    for (int y = 0; y < cam_depthGRAY.rows; ++dy)
-    {
-       short* row_ptr = cam_depthGRAY.ptr<short>(y);
-       for (int x = 0; x < cam_depthGRAY.cols; ++dx)
-       {
-           echtlln[y][x]=row_ptr[x];
-           if(echtlln[y][x]<min)
-               min=echtlln[y][x];
-           if(echtlln[y][x]>max)
-               max=echtlln[y][x];
-       }
-    }
-
-    for (int y = 0; y < cam_depthGRAY.rows; ++dy)
-    {
-       short* row_ptr = cam_depthGRAY.ptr<short>(y);
-       for (int x = 0; x < cam_depthGRAY.cols; ++dx)
-       {
-           echtlln[y][x]-=min;
-       }
-    }
-
-*/
-    /*******************************
-     END
-      opennni
-      ********************************/
-
-
+    glPolygonMode( GL_FRONT_AND_BACK, GL_FILL );
     dessineQuadTexture();
     glClear(GL_DEPTH_BUFFER_BIT);
-
+    glPolygonMode( GL_FRONT_AND_BACK, GL_LINE );
     glLoadIdentity();
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
 
-    glFrustum(-0.1f,0.1f,-0.1f,0.1f,0.1f,1000.0f);
+    glOrtho(-0.5f*WIDTH,0.5f*WIDTH,-0.5f*HEIGHT,0.5f*HEIGHT,0.0f,1000.0f);
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
     gluLookAt( 0., 0., -1.0, 0,0,1, 0., -1., 0.);
 
-    glutWireTeapot(2);
+    //glutWireTeapot(2);
+
+    OpenniStuff();
 
     glPopMatrix();
     // All done drawing.  Let's show it.
     glutSwapBuffers();
 
-    OpenNI2WrapperOpenCV::GrabFrameFromStream ( m_colorStream, m_colorFrame );
-    OpenNI2WrapperOpenCV::ConvertColorFrameToStream ( m_colorFrame, cam_rgb );
+
     //imshow("rgb",cam_rgb);
 
     //cv::waitKey(1);
