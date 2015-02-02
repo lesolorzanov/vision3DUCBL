@@ -1,0 +1,868 @@
+//***********************************///
+#include <iostream>
+
+#include <stdio.h>   // Always a good idea.
+#include <string.h>   // Always a good idea.
+#include <locale.h>
+#include <fstream>
+
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
+
+#include <GL/gl.h>   // OpenGL itself.
+#include <GL/glu.h>  // GLU support library.
+#include <GL/glut.h> // GLUT support library.
+
+#include <time.h>
+
+using namespace cv;
+using namespace std;
+
+#include <OpenNI.h>
+
+#include "OpenNIOpenCVWrapper.h"
+
+openni::Device m_device;
+openni::VideoStream m_depthStream, m_colorStream, m_irStream;
+openni::VideoFrameRef        m_depthFrame;
+openni::VideoFrameRef        m_colorFrame;
+openni::VideoFrameRef        m_irFrame;
+Mat cam_depthGRAY, cam_rgb, cam_ir;
+Mat drawing;
+
+#define DO_IR false
+
+#if 0
+#define WIDTH 640
+#define HEIGHT 480
+#define DEPTH 4
+#define RGB 9
+#define IR 5
+#else
+#define WIDTH 320
+#define HEIGHT 240
+#define DEPTH 1
+#define RGB 0
+#define IR 1
+#endif
+
+bool regMode = false;
+
+unsigned int pix;
+
+Mat src; Mat src_gray;
+
+int windowWidth = WIDTH;
+int windowHeight = HEIGHT;
+
+void dessineQuadTexture()
+{
+
+    GLuint texture;
+
+    glGenTextures( 1, &texture );
+    glBindTexture( GL_TEXTURE_2D, texture );
+    glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+
+
+    //even better quality, but this will do for now.
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,GL_LINEAR );
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,GL_LINEAR );
+
+
+    //to the edge of our shape.
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
+
+    //Generate the texture
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, windowWidth, windowHeight, 0,GL_BGR, GL_UNSIGNED_BYTE, img_cam.data);
+    glBindTexture( GL_TEXTURE_2D, texture );
+
+    orthogonalStart();
+    glColor3f(1.0, 1.0, 1.0);
+    const int iw = windowWidth;
+    const int ih = windowHeight;
+
+    glPushMatrix();
+    glTranslatef( -iw/2, -ih/2, 0 );
+    glBegin(GL_QUADS);
+        glTexCoord2i(0,1); glVertex2i(0, 0);
+        glTexCoord2i(1,1); glVertex2i(iw, 0);
+        glTexCoord2i(1,0); glVertex2i(iw, ih);
+        glTexCoord2i(0,0); glVertex2i(0, ih);
+    glEnd();
+
+    glPopMatrix();
+
+    orthogonalEnd();
+
+    FreeTexture(texture);
+}
+
+
+int main(int argc, char** argv) {
+
+
+
+    OpenNI2WrapperOpenCV::InitializeDevice ( NULL, m_device );
+
+    cam_depthGRAY.create(HEIGHT,WIDTH,CV_16SC1);
+    OpenNI2WrapperOpenCV::OpenStream ( m_device, openni::SENSOR_DEPTH, m_depthStream );
+    OpenNI2WrapperOpenCV::EnumerateStreamVideoModes ( m_depthStream );
+    OpenNI2WrapperOpenCV::StartStreamWithVideoMode ( m_depthStream, DEPTH );
+
+    if ( ! DO_IR ) {
+        cam_rgb.create(HEIGHT,WIDTH,CV_8UC3);
+        OpenNI2WrapperOpenCV::OpenStream ( m_device, openni::SENSOR_COLOR, m_colorStream );
+        OpenNI2WrapperOpenCV::EnumerateStreamVideoModes ( m_colorStream );
+        OpenNI2WrapperOpenCV::StartStreamWithVideoMode ( m_colorStream, RGB );
+    } else {
+        cam_ir.create(HEIGHT,WIDTH,CV_8UC3);
+        OpenNI2WrapperOpenCV::OpenStream ( m_device, openni::SENSOR_IR, m_irStream );
+        OpenNI2WrapperOpenCV::EnumerateStreamVideoModes ( m_irStream );
+        OpenNI2WrapperOpenCV::StartStreamWithVideoMode ( m_irStream, IR );
+    }
+
+    //OpenNI2WrapperOpenCV::SetFrameRegistrationMode ( m_device, true );
+
+    clock_t start, end;
+
+    start = clock();
+
+    while ( true ) {
+
+        OpenNI2WrapperOpenCV::GrabFrameFromStream ( m_depthStream, m_depthFrame );
+
+        OpenNI2WrapperOpenCV::ConvertDepthFrameToStream ( m_depthFrame, cam_depthGRAY );
+
+        end = clock();
+        double cpu_time_used = ((double) (end - start)) / CLOCKS_PER_SEC;
+
+        int pasEch=10;
+        int dx=WIDTH/pasEch,dy=HEIGHT/pasEch;
+        short min=32767, max=0;
+        short echtlln[dy][dx];
+
+        //il fqut preciser le data type du position camera
+
+        //trouver camera Z
+
+        short cameraZ=55; //je vais changer ca pour le min Z apres
+
+        //trouver region seulement chaque 2 seg
+        if(cpu_time_used > 1){
+            start = clock();
+
+            for (int y = 0; y < cam_depthGRAY.rows; ++dy)
+            {
+               short* row_ptr = cam_depthGRAY.ptr<short>(y);
+               for (int x = 0; x < cam_depthGRAY.cols; ++dx)
+               {
+                   echtlln[y][x]=row_ptr[x];
+                   if(echtlln[y][x]<min)
+                       min=echtlln[y][x];
+                   if(echtlln[y][x]>max)
+                       max=echtlln[y][x];
+               }
+            }
+
+            for (int y = 0; y < cam_depthGRAY.rows; ++dy)
+            {
+               short* row_ptr = cam_depthGRAY.ptr<short>(y);
+               for (int x = 0; x < cam_depthGRAY.cols; ++dx)
+               {
+                   echtlln[y][x]-=min;
+               }
+            }
+
+
+/*
+
+            //CHhoisir couleur  ou profondeur
+            Mat src, src_gray;
+
+            bool profondeur=true;
+
+            if(profondeur){
+                src_gray = Mat(cam_depthGRAY.rows, cam_depthGRAY.cols, CV_32FC1, togray32F);
+                src_gray.convertTo(src,CV_32FC1);
+
+            }else{
+                cvtColor( src_gray, src_gray, COLOR_GRAY2RGB );
+
+            }
+
+
+
+            //cvtColor( src_gray, src, COLOR_GRAY2RGB );
+              namedWindow("img");
+              imshow("img", src );
+              waitKey(0);
+              //if( !src.data )
+              //{ return -1; }
+
+              Mat grad;
+              int scale = 1;
+              int delta = 0;
+              int ddepth = CV_16S;
+
+              GaussianBlur( src, src, Size(3,3), 0, 0, BORDER_DEFAULT );
+
+                /// Convert it to gray
+
+                /// Generate grad_x and grad_y
+                Mat grad_x, grad_y;
+                Mat abs_grad_x, abs_grad_y;
+
+                /// Gradient X
+                //Scharr( src_gray, grad_x, ddepth, 1, 0, scale, delta, BORDER_DEFAULT );
+                Sobel( src_gray, grad_x, ddepth, 1, 0, 3, scale, delta, BORDER_DEFAULT );
+                convertScaleAbs( grad_x, abs_grad_x );
+
+                /// Gradient Y
+                //Scharr( src_gray, grad_y, ddepth, 0, 1, scale, delta, BORDER_DEFAULT );
+                Sobel( src_gray, grad_y, ddepth, 0, 1, 3, scale, delta, BORDER_DEFAULT );
+                convertScaleAbs( grad_y, abs_grad_y );
+
+                /// Total Gradient (approximate)
+                addWeighted( abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad );
+
+                /// Create window
+                namedWindow("Sobel");
+                imshow("Sobel", grad );
+
+                vector<vector<Point> > contours;
+                 vector<Vec4i> hierarchy;
+                findContours( grad, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE, Point(0, 0) );
+
+                 /// Draw contours
+                 Mat drawing = Mat::zeros( grad.size(), CV_8UC3 );
+                 for( int i = 0; i< contours.size(); i++ )
+                {
+                  Scalar color = Scalar( rng.uniform(0, 255), rng.uniform(0,255), rng.uniform(0,255) );
+
+                  if(contours[i].size()>50)
+                     drawContours( drawing, contours, i, color, 2, 8, hierarchy, 0, Point() );
+                }
+
+                 /// Show in a window
+                 namedWindow( "Contours");
+                 imshow( "Contours", drawing );*/
+
+        }
+
+        imshow("depth",cam_depthGRAY);
+
+        if ( ! DO_IR ) {
+            OpenNI2WrapperOpenCV::GrabFrameFromStream ( m_colorStream, m_colorFrame );
+            OpenNI2WrapperOpenCV::ConvertColorFrameToStream ( m_colorFrame, cam_rgb );
+            imshow("rgb",cam_rgb);
+        } else {
+            OpenNI2WrapperOpenCV::GrabFrameFromStream ( m_irStream, m_irFrame );
+            OpenNI2WrapperOpenCV::ConvertColorFrameToStream ( m_irFrame, cam_ir );
+            imshow("IR",cam_ir);
+        }
+        char key = (char) waitKey(30);
+        if ( key == 'q' ) break;
+        if ( key == 'r' ) {
+            regMode = ! regMode;
+            OpenNI2WrapperOpenCV::SetFrameRegistrationMode ( m_device, regMode );
+        }
+    }
+    if ( ! DO_IR ) {
+        m_colorStream.stop();
+        m_colorStream.destroy();
+    } else {
+        m_irStream.stop();
+        m_irStream.destroy();
+    }
+    m_depthStream.stop();
+    m_depthStream.destroy();
+    m_device.close();
+    openni::OpenNI::shutdown();
+}
+
+
+
+
+//*****************************//
+
+
+
+#include <stdio.h>   // Always a good idea.
+#include <string.h>   // Always a good idea.
+#include <locale.h>
+
+#include <opencv2/opencv.hpp>
+#ifdef WIN32
+    // unix to win porting
+    #define      __func__   __FUNCTION__
+    #define      __PRETTY_FUNCTION__   __FUNCTION__
+    #define   snprintf   _snprintf
+    #define      sleep(n_seconds)   Sleep((n_seconds)*1000)
+    #define   round(d)   floor((d) + 0.5)
+#endif
+
+
+// includes section
+
+#include "Apicamera/src/cameraUVC.h"
+#include "Calibration/src/chessboardcalibration.h"
+#include "Apicamera/src/cameraOPENCV.h"
+#include <iostream>
+#include <fstream>
+
+#include <GL/gl.h>   // OpenGL itself.
+#include <GL/glu.h>  // GLU support library.
+#include <GL/glut.h> // GLUT support library.
+
+
+// Some global variables.
+
+int Window_ID;
+
+// camera resolution
+int windowWidth = 640;
+int windowHeight = 480;
+
+void cameraUVC_getFrame( apicamera::CameraUVC *camera, cv::Mat *out1)
+{
+    cv::Mat(camera->get1Frame()).copyTo(*out1);
+}
+
+/*
+    Classe permettant de rcuperer les paramtres extrinseque de la camra
+*/
+class ExtrinsicChessboardCalibrator
+{
+public:
+    ExtrinsicChessboardCalibrator( unsigned int _cbWidth, unsigned int _cbHeight, float _squareSize, const char *_intrinsicFileName, const char *_extrinsicFileName)
+    {
+        // load intrinsic parameters
+        camera = new apicamera::CameraOPENCV();
+        camera->loadIntrinsicParameters(_intrinsicFileName);
+
+        // initialize calibration
+        calibrator = new ChessboardCalibration( camera, 1, _cbWidth, _cbHeight, _squareSize);
+        extrinsicFileName = _extrinsicFileName;
+    }
+
+    ~ExtrinsicChessboardCalibrator()
+    {
+        delete calibrator;
+        delete camera;
+    }
+
+    void processFrame( const cv::Mat *inImg, const cv::Mat *intrinsicA, const cv::Mat *intrinsicK, cv::Mat *translation, cv::Mat *rotation, cv::Mat *error, cv::Mat *outImg)
+    {
+        if( (! inImg) || (! inImg->data) )
+            return;
+
+        inImg->copyTo(*outImg);
+        IplImage currentImage(*outImg);
+
+        // set intrinsic parameters if provided through block inputs
+        if( intrinsicA )
+        {
+            cv::Mat A( 3, 3, CV_32FC1, camera->intrinsicA);
+            intrinsicA->copyTo(A);
+        }
+        if( intrinsicK )
+        {
+            cv::Mat K( 1, 4, CV_32FC1, camera->intrinsicK);
+            intrinsicK->copyTo(K);
+        }
+
+        // compute extrinsic parameters
+        camera->extrinsicError = calibrator->findExtrinsicParameters( 0.0f, 0.0f, &currentImage);
+
+        // save extrinsic parameters to file
+        camera->saveExtrinsicParameters(extrinsicFileName);
+
+        // copy extrinsic parameters and error to outputs
+        cv::Mat T( 1, 3, CV_32FC1, camera->extrinsicT);
+        T.copyTo(*translation);
+        cv::Mat R( 3, 3, CV_32FC1, camera->extrinsicR);
+        R.copyTo(*rotation);
+        cv::Mat E( 1, 1, CV_32FC1, &(camera->extrinsicError));
+        E.copyTo(*error);
+    }
+
+    apicamera::CameraOPENCV * getCam(){return camera;}
+
+protected:
+    // camera is used only to store/load/save intrinsic/extrinsic parameters
+    apicamera::CameraOPENCV *camera;
+
+    ChessboardCalibration *calibrator;
+    const char *extrinsicFileName;
+};
+
+/*
+    FIN CLASSE
+*/
+
+
+//variable globale
+ExtrinsicChessboardCalibrator *extrinsicCalibrator;
+apicamera::CameraUVC m_camerauvc;
+cv::Mat img_cam;
+int mire_height = 8;
+int mire_width = 5;
+float mire_size = 3.2;
+
+void showImage( const char* windowName, const cv::Mat *in)
+{
+    if( in == NULL || ( in->cols == 0 && in->rows == 0 ) )
+    {
+        // invalid image, display empty image
+        const int w = 200;
+        const int h = 100;
+        cv::Mat img = cv::Mat( h, w, CV_8UC3, cv::Scalar(0));
+        cv::line( img, cv::Point( 0, 0), cv::Point( w-1, h-1), cv::Scalar(0,0,255), 2);
+        cv::line( img, cv::Point( 0, h-1), cv::Point( w-1, 0), cv::Scalar(0,0,255), 2);
+        cv::imshow( windowName, img);
+        return;
+    }
+    else if( in->depth() == CV_32F  ||  in->depth() == CV_64F )
+    {
+        // float image must be normalized in [0,1] to be displayed
+        cv::Mat img;
+        cv::normalize( *in, img, 1.0, 0.0, cv::NORM_MINMAX);
+        cv::imshow( windowName, img);
+        return;
+    }
+
+    cv::imshow( windowName, *in);
+}
+
+/*void unproject( cv::Mat A, cv::Mat K, float *pi, float *pc)
+{
+    pc[0] = (pi[0] - A.at<float>(0, 2)) / A.at<float>(0, 0);
+    pc[1] = (pi[1] - A.at<float>(0, 5)) / A.at<float>(0, 4);
+    pc[2] = 1.0f;
+}*/
+
+float distance(const float *p1, const float *p2)
+{
+    return sqrt(pow(p2[0]-p1[0], 2) + pow(p2[1]-p1[1], 2) + pow(p2[2]-p1[2], 2) );
+}
+
+/**retrouve la position exacte (1% prs) d'un pixel dessinant la mire par rapport au rel.*/
+void unproject(const cv::Mat *A, const cv::Mat *K, const float piX, const float piY, float& pcX, float&
+pcY)
+{
+    pcX = (piX-A->at<float>(0,2))/A->at<float>(0,0);
+    pcY = (piY-A->at<float>(1,2))/A->at<float>(1,1);
+//printf("test : %f\n", A->at<float>(0,2));
+}
+
+/*
+    Fonction de calcul du frustrum (simulation de la vue de la camra relle) afin que les vues correspondent.
+*/
+void calculerFrustum( cv::Mat* A, cv::Mat* K, float w, float h, float *frustum)
+{
+    float pcX1, pcY1, pcX2, pcY2;
+    unproject(A,K, w/2.0, h/2.0, pcX1, pcY1);
+    unproject(A,K, 0.0, h/2.0, pcX2, pcY2);
+    frustum[0] =  -hypotf(pcX2-pcX1, pcY2-pcY1);//-0.1f; // left
+
+    unproject(A,K, w, h/2.0, pcX2, pcY2);
+    frustum[1] =  hypotf(pcX2-pcX1, pcY2-pcY1); //0.1f; // right
+
+    unproject(A,K, w/2.0, 0.0, pcX2, pcY2);
+    frustum[2] =  -hypotf(pcX2-pcX1, pcY2-pcY1);//-0.1f; // bottom
+
+    unproject(A,K, w/2.0, h, pcX2, pcY2);
+    frustum[3] =  hypotf(pcX2-pcX1, pcY2-pcY1);//0.1f; // top
+    frustum[4] =  1.0;//0.1f; // near
+    frustum[5] = 1000.0f; // far
+    /*float near = 1.0f;
+    float pc1[3], pc2[3], pc3[3], pc4[3], pc5[3];
+    float mid[2] = {w/2, h/2};
+    float left[2] = {0.0f, h/2};
+    float right[2] = {0.0f, h/2};
+    float bottom[2] = {0.0f, h/2};
+    float top[2] = {0.0f, h/2};
+
+    unproject(A, K, mid, pc1);
+    unproject(A, K, left, pc2);
+    unproject(A, K, right, pc3);
+    unproject(A, K, bottom, pc4);
+    unproject(A, K, top, pc5);
+
+    //gauche
+    frustum[0] = -near*distance(pc1, pc2);
+    //droite
+    frustum[1] = near*distance(pc1, pc3);
+    //bas
+    frustum[2] = -near*distance(pc1, pc4);
+    //haut
+    frustum[3] = near*distance(pc1, pc5);
+    //near
+    frustum[4] = near;
+    //far
+    frustum[5] = 1000.0f;*/
+
+}
+
+void dessineAxes(float taille)
+{
+    glBegin(GL_LINES);
+
+
+    // dessiner axe X en rouge
+    glColor3f( 1.0f, 0.0f, 0.0f);
+    glVertex3f( 0.0f, 0.0f, 0.0f);
+    glVertex3f( taille, 0.0f, 0.0f);
+    // dessiner axe Y en vert
+    glColor3f( 0.0f, 1.0f, 0.0f);
+    glVertex3f( 0.0f, 0.0f, 0.0f);
+    glVertex3f( 0.0f, taille, 0.0f);
+    // dessiner axe Z en bleu
+    glColor3f( 0.0f, 0.0f, 1.0f);
+    glVertex3f( 0.0f, 0.0f, 0.0f);
+    glVertex3f( 0.0f, 0.0f, taille);
+
+    glEnd();
+}
+
+
+void dessineMire( int w, int h, float sz)
+{
+/*    glBegin(GL_QUADS);
+    for(int x = 0 ; x < w ; x++)
+    {
+        for(int y = 0 ; y < h ; y++)
+        {
+            if(x%2 == y%2)
+                glColor3f( 0.0f, 0.0f, 0.0f);
+            else
+                glColor3f( 1.0f, 1.0f, 1.0f);
+
+            glVertex3f( (x-1)*sz, (y-1)*sz, 0.0f);
+            glVertex3f( (x-1)*sz, y*sz, 0.0f);
+            glVertex3f( x*sz, y*sz, 0.0f);
+            glVertex3f( x*sz, (y-1)*sz, 0.0f);
+        }
+    }
+
+    glEnd();*/
+
+}
+
+
+
+// calcule la transformation GtoC
+// GtoC = Global to Camera = Mire to Camera
+// Il s'agit de la transformation  applisuqer  la camra openGl pour
+//Correspondre  la vision d la camra rlle.
+void calculerTransformation( cv::Mat R, cv::Mat T, float *GtoC)
+{
+
+
+    // attention au format des matrices OpenGL, en colonnes
+
+    GtoC[0] = R.at<float>(0, 0); // colonne 1
+    GtoC[1] = R.at<float>(1, 0);
+    GtoC[2] = R.at<float>(2, 0);
+    GtoC[3] = 0.0;
+
+    GtoC[4] = R.at<float>(0, 1); // colonne 2
+    GtoC[5] = R.at<float>(1, 1);
+    GtoC[6] = R.at<float>(2, 1);
+    GtoC[7] = 0.0;
+
+    GtoC[8] = R.at<float>(0, 2); // colonne 3
+    GtoC[9] = R.at<float>(1, 2);
+    GtoC[10] = R.at<float>(2, 2);
+    GtoC[11] =0.0;
+
+    GtoC[12] = T.at<float>(0, 0); // colonne 4
+    GtoC[13] = T.at<float>(0, 1);
+    GtoC[14] = T.at<float>(0, 2);
+    GtoC[15] = 1.0;
+
+}
+
+void dessineTeaPot()
+{
+    glPushMatrix();
+    glTranslatef(0, 0, -5);
+    glRotatef(-90, 1, 0, 0);
+    glColor3f(0.5, 0.5, 0.0);
+    glutWireTeapot(6.0);
+    //glutSolidTeapot(6.0);
+    glPopMatrix();
+}
+
+void orthogonalStart()
+{
+    glLoadIdentity();
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    gluOrtho2D(-windowWidth/2, windowWidth/2, -windowHeight/2, windowHeight/2);
+    glMatrixMode(GL_MODELVIEW);
+}
+
+void orthogonalEnd()
+{
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
+void FreeTexture( GLuint texture )
+{
+    glDeleteTextures( 1, &texture );
+}
+
+
+/*
+    Fonction charge de dessiner le fond (image de la camra)
+    (Je ne sais pas pourquoi elle est schtroumpf)
+*/
+void dessineQuadTexture()
+{
+
+    GLuint texture;
+
+    glGenTextures( 1, &texture );
+    glBindTexture( GL_TEXTURE_2D, texture );
+    glTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+
+
+    //even better quality, but this will do for now.
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,GL_LINEAR );
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,GL_LINEAR );
+
+
+    //to the edge of our shape.
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT );
+    glTexParameterf( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT );
+
+    //Generate the texture
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, windowWidth, windowHeight, 0,GL_BGR, GL_UNSIGNED_BYTE, img_cam.data);
+    glBindTexture( GL_TEXTURE_2D, texture );
+
+    orthogonalStart();
+    glColor3f(1.0, 1.0, 1.0);
+    const int iw = windowWidth;
+    const int ih = windowHeight;
+
+    glPushMatrix();
+    glTranslatef( -iw/2, -ih/2, 0 );
+    glBegin(GL_QUADS);
+        glTexCoord2i(0,1); glVertex2i(0, 0);
+        glTexCoord2i(1,1); glVertex2i(iw, 0);
+        glTexCoord2i(1,0); glVertex2i(iw, ih);
+        glTexCoord2i(0,0); glVertex2i(0, ih);
+    glEnd();
+
+    glPopMatrix();
+
+    orthogonalEnd();
+
+    FreeTexture(texture);
+}
+
+
+//Fonction de dessin.
+void glDrawFromCamera( cv::Mat &A, cv::Mat &K, cv::Mat &R, cv::Mat &T)
+{
+    dessineQuadTexture();
+    float frustum[6], GtoC[16];
+    calculerFrustum( &A, &K, windowWidth, windowHeight, frustum);
+        calculerTransformation( R, T, GtoC);
+        glClear(GL_DEPTH_BUFFER_BIT);
+
+        glLoadIdentity();
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glFrustum( frustum[0], frustum[1], frustum[2], frustum[3], frustum[4], frustum[5]);
+
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // passe dans le repre camra
+    gluLookAt( 0., 0., 0., 0., 0., 1., 0., -1., 0.);
+        //ou glMultMatrixf(transfoCameraAxisToGLAxis)
+       /* for(int i = 0 ; i < 4 ; i++){
+            std::cout << GtoC[i] << " "<< GtoC[i+4] << " "<< GtoC[i+8] << " "<< GtoC[i+12] << "\n";
+        }*/
+
+
+        glMultMatrixf(GtoC);
+    //glTranslatef( 0.0, 0.0, -1.0);
+    dessineAxes(5.0);
+    dessineMire( mire_height, mire_width, mire_size);
+    dessineTeaPot();
+}
+
+/*
+    Fonction permettant de calculer les matruces T et R  partird'une capture d'image opencv
+*/
+void getParameters( cv::Mat &A, cv::Mat &K, cv::Mat &R, cv::Mat &T)
+{
+    cameraUVC_getFrame( &m_camerauvc, &img_cam);
+    cv::Mat error;
+    cv::Mat output_img;
+    extrinsicCalibrator->processFrame( &img_cam, NULL, NULL, &T, &R, &error, &output_img);
+    showImage("Camera", &output_img);
+    cv::waitKey(5);
+    cv::Mat matA( 3, 3, CV_32FC1, extrinsicCalibrator->getCam()->intrinsicA);
+    matA.copyTo(A);
+    cv::Mat matK( 1, 4, CV_32FC1, extrinsicCalibrator->getCam()->intrinsicK);
+    matK.copyTo(K);
+}
+
+// ------
+// Drawing function
+void cbRenderScene(void)
+{
+    cv::Mat A, K, R, T;
+    getParameters(A, K, R, T);
+
+
+    // desactive textures
+    glEnable(GL_TEXTURE_2D);
+
+    // active z-buffering pour masquage partie cachee
+    glEnable(GL_DEPTH_TEST);
+
+    // Clear the color and depth buffers.
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // dessine dans le point de vue de la camra
+    glDrawFromCamera( A, K, R, T);
+
+    // All done drawing.  Let's show it.
+    glutSwapBuffers();
+}
+
+
+// ------
+// Callback function called when a normal key is pressed.
+void cbKeyPressed( unsigned char key, int x, int y)
+{
+    switch (key)
+    {
+        case 113: case 81: case 27: // Q (Escape) - We're outta here.
+            glutDestroyWindow(Window_ID);
+            exit(1);
+            break; // exit doesn't return, but anyway...
+
+        case 'i':
+        case 'I':
+            break;
+
+        default:
+            printf ("KP: No action for %d.\n", key);
+            break;
+    }
+}
+
+
+// ------
+// Does everything needed before losing control to the main
+// OpenGL event loop.
+void ourInit(void)
+{
+    // Color to clear color buffer to.
+    glClearColor(0.1f, 0.1f, 0.1f, 0.0f);
+
+    // Depth to clear depth buffer to; type of test.
+    glClearDepth(1.0);
+    glDepthFunc(GL_LESS);
+
+    // Enables Smooth Color Shading; try GL_FLAT for (lack of) fun.
+    glShadeModel(GL_SMOOTH);
+}
+
+
+// ------
+// The main() function.  Inits OpenGL.  Calls our own init function,
+// then passes control onto OpenGL.
+int main(  int argc,  char **argv)
+{
+    //Paramtres de calibration OpenCV
+
+    char * intrinseque_file = "intrinsics.txt";
+    if(argc > 1)
+    {
+        mire_height = atoi(argv[1]);
+    }
+    if(argc > 2)
+    {
+        mire_width = atoi(argv[2]);
+    }
+    if(argc > 3)
+    {
+        mire_size = atof(argv[3]);
+    }
+    if(argc > 4)
+    {
+        intrinseque_file = argv[4];
+    }
+    if(argc > 5)
+    {
+        std::cout << "prog -height -width -size -intrinseque_file \n";
+        return 0;
+    }
+
+    apicamera::OpenParameters openParam_block2_;
+    openParam_block2_.width = 640;
+    openParam_block2_.height = 480;
+    openParam_block2_.fRate = 30;
+
+    if( m_camerauvc.open( 0, &openParam_block2_) != 0 )
+    {
+        printf( "failed to init UVC Camera. Exiting ...\n");
+        exit(1);
+    }
+    extrinsicCalibrator = new ExtrinsicChessboardCalibrator( mire_height, mire_width, mire_size, intrinseque_file, "extrinsics.txt");
+
+
+    /*###########################################################################
+                FIN CALIBRATION OPENCV
+    ############################################################################*/
+
+    // pour eviter pb de . et , dans les floats
+    setlocale(LC_NUMERIC, "C");
+
+    // initialisation de glut ???
+    glutInit(&argc, argv);
+
+    // To see OpenGL drawing, take out the GLUT_DOUBLE request.
+    glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH);
+    glutInitWindowSize(windowWidth, windowHeight);
+
+    // Open a window
+    Window_ID = glutCreateWindow("OpenGL");
+
+    // Register the callback function to do the drawing.
+    glutDisplayFunc(&cbRenderScene);
+
+    // If there's nothing to do, draw.
+    glutIdleFunc(&cbRenderScene);
+
+    // And let's get some keyboard input.
+    glutKeyboardFunc(&cbKeyPressed);
+
+    // OK, OpenGL's ready to go.  Let's call our own init function.
+    ourInit();
+
+
+    // Pass off control to OpenGL.
+    // Above functions are called as appropriate.
+    glutMainLoop();
+
+    return 1;
+}
+
+
+
+

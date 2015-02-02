@@ -1,0 +1,10 @@
+à faire une seule fois :
+
+source /Shared/SetupFreenect
+source /Shared/SetupOpenNI2
+source /Shared/SetupOpenCV
+
+compilation:
+
+g++ -ggdb $OPENNI2_CXXFLAGS $OPENCV_CXXFLAGS -fpermissive -c main.cpp -o main.o
+g++ -ggdb $OPENNI2_LDFLAGS $OPENCV_LDFLAGS -o test main.o -lOpenNI2 -lopencv_core -lopencv_imgproc -lopencv_highgui
